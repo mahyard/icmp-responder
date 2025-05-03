@@ -22,6 +22,7 @@
 #include <iostream>
 #include <unistd.h>
 
+#include <arpa/inet.h>
 #include <netinet/ip.h>       // for iphdr
 #include <netinet/ip_icmp.h>  // for icmphdr
 #include <libnetfilter_queue/libnetfilter_queue.h>
@@ -79,27 +80,42 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                 struct icmphdr *icmpHeader = (struct icmphdr*)(packetData + ipHeaderLen);
                 // Check if this is an Echo Request (ICMP type 8)
                 if (icmpHeader->type == ICMP_ECHO) {
-                    std::cerr << "Received ICMP Echo Request.\n";
+                    struct in_addr src_addr, dst_addr;
+                    src_addr.s_addr = ipHeader->daddr;
+                    dst_addr.s_addr = ipHeader->saddr;
 
-                    // Modify the packet:
-                    // Change type from Echo Request (8) to Echo Reply (0)
+                    std::cerr << "ICMP Echo Request from " << inet_ntoa(src_addr)
+                              << " to " << inet_ntoa(dst_addr) << "\n";
+                    std::cerr << "Payload Length: " << len << " bytes\n";
+
+                    // Modify to Echo Reply
                     icmpHeader->type = ICMP_ECHOREPLY;
-                    // Set checksum to zero before recalculation
                     icmpHeader->checksum = 0;
-                    // Recalculate the checksum for the ICMP header and its payload
                     int icmpLen = len - ipHeaderLen;
                     icmpHeader->checksum = compute_icmp_checksum((unsigned short*)icmpHeader, icmpLen);
 
-                    std::cerr << "Converted to ICMP Echo Reply.\n";
+                    std::cerr << "Converted to ICMP Echo Reply. Setting verdict NF_ACCEPT with modified payload.\n";
 
-                    // Accept and replace the packet with our modified version
-                    return nfq_set_verdict(qh, id, NF_ACCEPT, len, packetData);
+                    std::cerr << "Hexdump of packet before reinjection:\n";
+                    for (int i = 0; i < len; ++i) {
+                        fprintf(stderr, "%02x ", packetData[i]);
+                        if ((i + 1) % 16 == 0) fprintf(stderr, "\n");
+                    }
+                    fprintf(stderr, "\n");
+
+                    int verdict_result = nfq_set_verdict(qh, id, NF_ACCEPT, len, packetData);
+                    if (verdict_result < 0) {
+                        std::cerr << "Error: nfq_set_verdict() failed with code " << verdict_result << "\n";
+                    }
+
+                    return verdict_result;
                 }
             }
         }
     }
 
     // For non-ICMP or non-echo-request packets, just accept without modification
+    std::cerr << "Non-ICMP or unhandled packet, passing through unchanged.\n";
     return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
