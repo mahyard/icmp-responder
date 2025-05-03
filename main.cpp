@@ -56,6 +56,30 @@ unsigned short compute_icmp_checksum(unsigned short *data, int len) {
     return (unsigned short)(~sum);
 }
 
+// Compute IP header checksum
+uint16_t compute_ip_checksum(struct iphdr* iph, int len) {
+    uint32_t sum = 0;
+    uint16_t* ptr = (uint16_t*)iph;
+
+    // Sum all 16-bit words in the header
+    for (int i = 0; i < len / 2; ++i) {
+        sum += ntohs(ptr[i]);
+    }
+
+    // If header length is odd, add the last byte padded with zero
+    if (len & 1) {
+        sum += *((uint8_t*)iph + len - 1) << 8;
+    }
+
+    // Fold 32-bit sum to 16 bits
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    // Return one's complement in network byte order
+    return htons(~sum);
+}
+
 // Callback function for handling packets from NFQUEUE
 static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                         struct nfq_data *nfa, void *data)
@@ -80,17 +104,25 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                 struct icmphdr *icmpHeader = (struct icmphdr*)(packetData + ipHeaderLen);
                 // Check if this is an Echo Request (ICMP type 8)
                 if (icmpHeader->type == ICMP_ECHO) {
-                    struct in_addr src_addr, dst_addr;
-                    src_addr.s_addr = ipHeader->daddr;
-                    dst_addr.s_addr = ipHeader->saddr;
+                    std::cerr << "Received ICMP Echo Request from "
+                        << inet_ntoa({ipHeader->saddr}) << " to "
+                        << inet_ntoa({ipHeader->daddr}) << "\n";
 
-                    std::cerr << "ICMP Echo Request from " << inet_ntoa(src_addr)
-                              << " to " << inet_ntoa(dst_addr) << "\n";
-                    std::cerr << "Payload Length: " << len << " bytes\n";
+                    // Swap source and destination IP addresses
+                    uint32_t tmp_ip = ipHeader->saddr;
+                    ipHeader->saddr = ipHeader->daddr;
+                    ipHeader->daddr = tmp_ip;
+
+                    // Recalculate IP checksum
+                    ipHeader->check = 0;
+                    ipHeader->check = compute_ip_checksum(ipHeader, ipHeaderLen);
 
                     // Modify to Echo Reply
                     icmpHeader->type = ICMP_ECHOREPLY;
+
+                    // Set checksum to zero before recalculation
                     icmpHeader->checksum = 0;
+                    // Recalculate the checksum for the ICMP header and its payload
                     int icmpLen = len - ipHeaderLen;
                     icmpHeader->checksum = compute_icmp_checksum((unsigned short*)icmpHeader, icmpLen);
 
@@ -107,7 +139,9 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                     if (verdict_result < 0) {
                         std::cerr << "Error: nfq_set_verdict() failed with code " << verdict_result << "\n";
                     }
+                    std::cerr << "Converted to ICMP Echo Reply.\n";
 
+                    // Accept and replace the packet with our modified version
                     return verdict_result;
                 }
             }
@@ -115,7 +149,6 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     }
 
     // For non-ICMP or non-echo-request packets, just accept without modification
-    std::cerr << "Non-ICMP or unhandled packet, passing through unchanged.\n";
     return nfq_set_verdict(qh, id, NF_ACCEPT, 0, NULL);
 }
 
