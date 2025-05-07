@@ -80,6 +80,16 @@ uint16_t compute_ip_checksum(struct iphdr* iph, int len) {
     return htons(~sum);
 }
 
+// Utility function to log packet hexdump
+void logPacketHexdump(const unsigned char* data, int length, const std::string& label) {
+    std::cerr << label << " (" << length << " bytes):\n";
+    for (int i = 0; i < length; ++i) {
+        fprintf(stderr, "%02x ", data[i]);
+        if ((i + 1) % 16 == 0) fprintf(stderr, "\n");
+    }
+    if (length % 16 != 0) fprintf(stderr, "\n");
+}
+
 // Callback function for handling packets from NFQUEUE
 static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
                         struct nfq_data *nfa, void *data)
@@ -95,6 +105,7 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
     unsigned char *packetData;
     int len = nfq_get_payload(nfa, &packetData);
     if (len >= 0) {
+        logPacketHexdump(packetData, len, "Raw packet from NFQUEUE");
         // Parse the IP header
         struct iphdr *ipHeader = (struct iphdr*)packetData;
         if (ipHeader->protocol == IPPROTO_ICMP) {
@@ -128,13 +139,7 @@ static int handlePacket(struct nfq_q_handle *qh, struct nfgenmsg *nfmsg,
 
                     std::cerr << "Converted to ICMP Echo Reply. Setting verdict NF_ACCEPT with modified payload.\n";
 
-                    std::cerr << "Hexdump of packet before reinjection:\n";
-                    for (int i = 0; i < len; ++i) {
-                        fprintf(stderr, "%02x ", packetData[i]);
-                        if ((i + 1) % 16 == 0) fprintf(stderr, "\n");
-                    }
-                    fprintf(stderr, "\n");
-
+                    logPacketHexdump(packetData, len, "Packet after modification");
                     int verdict_result = nfq_set_verdict(qh, id, NF_ACCEPT, len, packetData);
                     if (verdict_result < 0) {
                         std::cerr << "Error: nfq_set_verdict() failed with code " << verdict_result << "\n";
