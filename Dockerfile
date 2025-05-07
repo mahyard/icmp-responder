@@ -2,7 +2,7 @@
 FROM alpine:3.20 AS builder
 
 # Install build dependencies
-RUN apk add --no-cache g++ musl-dev libnetfilter_queue-dev
+RUN apk add --no-cache g++ musl-dev libnetfilter_queue-dev linux-headers
 
 # Set working directory and copy the source code
 WORKDIR /app
